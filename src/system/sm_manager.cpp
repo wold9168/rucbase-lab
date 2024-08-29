@@ -15,6 +15,8 @@ See the Mulan PSL v2 for more details. */
 
 #include <fstream>
 
+#include "common/config.h"
+#include "errors.h"
 #include "index/ix.h"
 #include "record/rm.h"
 #include "record_printer.h"
@@ -85,7 +87,26 @@ void SmManager::drop_db(const std::string& db_name) {
  * @description: 打开数据库，找到数据库对应的文件夹，并加载数据库元数据和相关文件
  * @param {string&} db_name 数据库名称，与文件夹同名
  */
-void SmManager::open_db(const std::string& db_name) {}
+void SmManager::open_db(const std::string& db_name) {
+    if (!is_dir(db_name)) {
+        throw DatabaseNotFoundError(db_name);
+    }
+    if (chdir(db_name.c_str()) < 0) {
+        throw UnixError();
+    }
+    std::ifstream ifs(DB_META_NAME);
+    ifs >> db_;
+    for (auto& entry : db_.tabs_) {
+        auto& tab_name = entry.first;
+        // auto& tab = entry.second;
+        fhs_[tab_name] = rm_manager_->open_file(tab_name);
+        for (auto& index : db_.tabs_[tab_name].indexes) {
+            ihs_.emplace(ix_manager_->get_index_name(tab_name, index.cols),
+                         ix_manager_->open_index(tab_name, index.cols));
+        }
+    }
+    return;
+}
 
 /**
  * @description: 把数据库相关的元数据刷入磁盘中
@@ -99,7 +120,22 @@ void SmManager::flush_meta() {
 /**
  * @description: 关闭数据库并把数据落盘
  */
-void SmManager::close_db() {}
+void SmManager::close_db() {
+    flush_meta();
+    for (auto& entry : fhs_) {
+        rm_manager_->close_file(entry.second.get());
+    }
+    for (auto& entry : ihs_) {
+        ix_manager_->close_index(entry.second.get());
+    }
+    db_.name_.clear();
+    db_.tabs_.clear();
+    fhs_.clear();
+    ihs_.clear();
+    if (chdir("..") < 0) {
+        throw UnixError();
+    }
+}
 
 /**
  * @description: 显示所有的表,通过测试需要将其结果写入到output.txt,详情看题目文档
@@ -184,7 +220,25 @@ void SmManager::create_table(const std::string& tab_name, const std::vector<ColD
  * @param {string&} tab_name 表的名称
  * @param {Context*} context
  */
-void SmManager::drop_table(const std::string& tab_name, Context* context) {}
+void SmManager::drop_table(const std::string& tab_name, Context* context) {
+    if (!db_.is_table(tab_name)) {
+        throw TableNotFoundError(tab_name);
+    } else {
+        rm_manager_->close_file(fhs_[tab_name].get());
+        rm_manager_->destroy_file(tab_name);
+        for (auto& index : db_.tabs_[tab_name].indexes) {
+            if (ix_manager_->exists(tab_name, index.cols)) {
+                std::string idx_name = ix_manager_->get_index_name(tab_name, index.cols);
+                const IxIndexHandle* ih = ihs_[idx_name].get();
+                ix_manager_->close_index(ih);
+                ix_manager_->destroy_index(tab_name, index.cols);
+                ihs_.erase(idx_name);
+            }
+        }
+        db_.tabs_.erase(tab_name);
+        fhs_.erase(tab_name);
+    }
+}
 
 /**
  * @description: 创建索引
@@ -224,7 +278,15 @@ void SmManager::create_index(const std::string& tab_name, const std::vector<std:
  * @param {vector<string>&} col_names 索引包含的字段名称
  * @param {Context*} context
  */
-void SmManager::drop_index(const std::string& tab_name, const std::vector<std::string>& col_names, Context* context) {}
+void SmManager::drop_index(const std::string& tab_name, const std::vector<std::string>& col_names, Context* context) {
+    std::string idx_name = ix_manager_->get_index_name(tab_name, col_names);
+    const IxIndexHandle* ih = ihs_[idx_name].get();
+    ix_manager_->close_index(ih);
+    ix_manager_->destroy_index(tab_name, col_names);
+    ihs_.erase(ix_manager_->get_index_name(tab_name, col_names));
+    auto idx_meta = db_.get_table(tab_name).get_index_meta(col_names);
+    db_.get_table(tab_name).indexes.erase(idx_meta);
+}
 
 /**
  * @description: 删除索引
