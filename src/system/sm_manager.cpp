@@ -269,6 +269,7 @@ void SmManager::create_index(const std::string& tab_name, const std::vector<std:
     ix_manager_->create_index(tab_name, columes);
 
     db_.get_table(tab_name).indexes.push_back(ix_meta);
+    ihs_.emplace(ix_manager_->get_index_name(tab_name,col_names),ix_manager_->open_index(tab_name,col_names));
     return;
 }
 
