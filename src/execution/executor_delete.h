@@ -24,6 +24,8 @@ class DeleteExecutor : public AbstractExecutor {
     std::string tab_name_;          // 表名称
     SmManager *sm_manager_;
 
+    std::vector<ColMeta> cols_;  // 自定义
+
    public:
     DeleteExecutor(SmManager *sm_manager, const std::string &tab_name, std::vector<Condition> conds,
                    std::vector<Rid> rids, Context *context) {
@@ -34,9 +36,23 @@ class DeleteExecutor : public AbstractExecutor {
         conds_ = conds;
         rids_ = rids;
         context_ = context;
+
+        cols_ = tab_.cols;
     }
 
     std::unique_ptr<RmRecord> Next() override {
+        for (Rid rid : rids_) {
+            if (!fh_->is_record(rid)) {
+                //TODO：删除失败的内容可以单开一个运行时日志写出去
+                continue;
+            }
+
+            if (!condCheck(fh_->get_record(rid, context_).get(), conds_, tab_.cols)) {
+                continue;
+            }
+
+            fh_->delete_record(rid, context_);
+        }
         return nullptr;
     }
 

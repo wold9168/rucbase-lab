@@ -17,17 +17,17 @@ See the Mulan PSL v2 for more details. */
 
 class NestedLoopJoinExecutor : public AbstractExecutor {
    private:
-    std::unique_ptr<AbstractExecutor> left_;    // 左儿子节点（需要join的表）
-    std::unique_ptr<AbstractExecutor> right_;   // 右儿子节点（需要join的表）
-    size_t len_;                                // join后获得的每条记录的长度
-    std::vector<ColMeta> cols_;                 // join后获得的记录的字段
+    std::unique_ptr<AbstractExecutor> left_;
+    std::unique_ptr<AbstractExecutor> right_;
+    size_t len_;
+    std::vector<ColMeta> cols_;
 
-    std::vector<Condition> fed_conds_;          // join条件
+    std::vector<Condition> fed_conds_;
     bool isend;
 
    public:
-    NestedLoopJoinExecutor(std::unique_ptr<AbstractExecutor> left, std::unique_ptr<AbstractExecutor> right, 
-                            std::vector<Condition> conds) {
+    NestedLoopJoinExecutor(std::unique_ptr<AbstractExecutor> left, std::unique_ptr<AbstractExecutor> right,
+                           std::vector<Condition> conds) {
         left_ = std::move(left);
         right_ = std::move(right);
         len_ = left_->tupleLen() + right_->tupleLen();
@@ -40,20 +40,44 @@ class NestedLoopJoinExecutor : public AbstractExecutor {
         cols_.insert(cols_.end(), right_cols.begin(), right_cols.end());
         isend = false;
         fed_conds_ = std::move(conds);
-
     }
 
     void beginTuple() override {
-
+        left_->beginTuple();
+        right_->beginTuple();
     }
 
     void nextTuple() override {
-        
+        for (; !right_->is_end(); right_->nextTuple()) {
+            if (left_->is_end())
+                left_->beginTuple();
+            else
+                left_->nextTuple();
+
+            for (; !left_->is_end(); left_->nextTuple()) {
+                if (condCheck(get_rec().get(), fed_conds_, cols_)) return;
+            }
+        }
     }
 
-    std::unique_ptr<RmRecord> Next() override {
-        return nullptr;
-    }
+    std::unique_ptr<RmRecord> Next() override { return get_rec(); }
 
     Rid &rid() override { return _abstract_rid; }
+
+    bool is_end() const override { return left_->is_end(); }
+
+    std::unique_ptr<RmRecord> get_rec() {
+        std::unique_ptr<RmRecord> record = std::make_unique<RmRecord>(len_);
+        std::unique_ptr<RmRecord> l_rec = left_->Next();
+        std::unique_ptr<RmRecord> r_rec = right_->Next();
+        memset(record->data, 0, record->size);
+        memcpy(record->data, l_rec->data, l_rec->size);
+        memcpy(record->data + l_rec->size, r_rec->data, r_rec->size);
+
+        return record;
+    }
+
+    size_t tupleLen() const override { return len_; };
+    std::string getType() override { return "NestedLoopJoinExecutor"; };
+    const std::vector<ColMeta> &cols() const override { return cols_; };
 };

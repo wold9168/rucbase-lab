@@ -53,4 +53,65 @@ class AbstractExecutor {
         }
         return pos;
     }
+    std::map<TabCol, Value> rec2dict(const std::vector<ColMeta> &cols, const RmRecord *rec) {
+        std::map<TabCol, Value> rec_dict;
+        for (auto &col : cols) {
+            TabCol key = {.tab_name = col.tab_name, .col_name = col.name};
+            Value val;
+            char *val_buf = rec->data + col.offset;
+            if (col.type == TYPE_INT) {
+                val.set_int(*(int *)val_buf);
+            } else if (col.type == TYPE_FLOAT) {
+                val.set_float(*(float *)val_buf);
+            } else if (col.type == TYPE_STRING) {
+                std::string str_val((char *)val_buf, col.len);
+                str_val.resize(strlen(str_val.c_str()));
+                val.set_str(str_val);
+            }
+            assert(rec_dict.count(key) == 0);
+            val.init_raw(col.len);
+            rec_dict[key] = val;
+        }
+        return rec_dict;
+    }
+    bool condCheck(const RmRecord *l_record, const std::vector<Condition>& conds_, const std::vector<ColMeta>& cols_) {
+        char *l_val_buf, *r_val_buf;
+        const RmRecord *r_record;
+
+        for (auto &condition : conds_) {
+            CompOp op = condition.op;
+            int cmp;
+
+            auto l_col = get_col(cols_, condition.lhs_col);
+            l_val_buf = l_record->data + l_col->offset;
+
+            if (condition.is_rhs_val) {
+                r_record = condition.rhs_val.raw.get();
+                r_val_buf = r_record->data;
+
+                cmp = ix_compare(l_val_buf, r_val_buf, condition.rhs_val.type, l_col->len);
+            } else {
+                auto r_col = get_col(cols_, condition.rhs_col);
+                r_val_buf = l_record->data + r_col->offset;
+
+                cmp = ix_compare(l_val_buf, r_val_buf, r_col->type, l_col->len);
+            }
+            if (!op_compare(op, cmp))
+                return false;
+        }
+        return true;
+    }
+    static bool op_compare(CompOp op, int cmp) {
+        switch(op){
+            case OP_EQ: return cmp==0;break;
+            case OP_NE: return cmp!=0;break;
+            case OP_LT: return cmp<0;break;
+            case OP_GT: return cmp>0;break;
+            case OP_LE: return cmp<=0;break;
+            case OP_GE: return cmp>=0;break;
+            default:throw InternalError("Invalid CompOp"); break;
+        }
+    }
+    virtual void feed(const std::map<TabCol, Value> &feed_dict){};
 };
+
